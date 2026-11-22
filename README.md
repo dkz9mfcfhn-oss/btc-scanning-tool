@@ -1,0 +1,21 @@
+# BTC Scanning tool
+
+Windows 10/11 x64 原生矿机监控工具。支持扫描 Antminer、Avalon 和 WhatsMiner，查看矿机状态、算力、各板温度和功率，并汇总最近 24 小时的算力与预估净收益。
+
+- 在 Windows 双击运行 EXE，配置矿场 IP 网段后选择「保存并扫描」。
+- 使用 `BTC-Scanning-tool.exe -demo` 查看演示数据。
+- 主界面「软件来源」可打开本项目仓库。
+- 详细功能、历史版本和构建说明见 [Windows 使用与构建说明](README-NATIVE.md)。
+
+## 构建
+
+使用 Go 1.24 或更新版本。在 PowerShell 中执行：
+
+```powershell
+$env:CGO_ENABLED = '0'
+$env:GOOS = 'windows'
+$env:GOARCH = 'amd64'
+go build -trimpath -ldflags='-s -w -H windowsgui' -o BTC-Scanning-tool.exe .
+```
+
+仓库中包含源码、图标、构建资源、测试及可选的云端看护服务。第三方组件说明见 [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt)。

@@ -1,0 +1,12 @@
+{
+  "brand": "Avalon",
+  "model": "Avalon 1566HA",
+  "tempC": 81,
+  "temperatures": [
+    {
+      "name": "原始温度 1",
+      "valueC": 0,
+      "source": "BTC Tools temperature/DEVS.Temperature/1"
+    }
+  ]
+}

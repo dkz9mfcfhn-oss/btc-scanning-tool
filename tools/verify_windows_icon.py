@@ -34,6 +34,7 @@ print('PASS: Windows x64 GUI; icon group ID 1; all 7 icon sizes match source')
 
 if len(sys.argv) > 3:
     expected_name, expected_version = sys.argv[3:5]
+    expected_product_version = sys.argv[5] if len(sys.argv) > 5 else expected_version
     info=resource(16,1)
 
     def version_block(start):
@@ -67,6 +68,6 @@ if len(sys.argv) > 3:
     lang, codepage=struct.unpack('<HH', translation)
     strings=children['StringFileInfo'][1][f'{lang:04x}{codepage:04x}'][1]
     for field,value in {'FileDescription':expected_name, 'ProductName':expected_name,
-                        'FileVersion':expected_version, 'ProductVersion':expected_version}.items():
+                        'FileVersion':expected_version, 'ProductVersion':expected_product_version}.items():
         assert strings[field][0].decode('utf-16le')==value+'\0',field
-    print(f'PASS: FileDescription and ProductName = {expected_name}; file/product version = {expected_version}')
+    print(f'PASS: FileDescription and ProductName = {expected_name}; file version = {expected_version}; product version = {expected_product_version}')

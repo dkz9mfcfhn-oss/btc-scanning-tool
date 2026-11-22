@@ -23,20 +23,21 @@ const rtVersion = 16
 func main() {
 	iconPath := flag.String("ico", "", "input Windows ICO")
 	output := flag.String("o", "", "output Windows amd64 .syso file")
-	name := flag.String("name", "BTC Scanning tool", "file description and product name")
+	name := flag.String("name", "BTC scanning tool", "file description and product name")
 	version := flag.String("version", "", "four-part file and product version")
+	productVersion := flag.String("product-version", "", "optional product version label shown in Windows")
 	flag.Parse()
 	if *iconPath == "" || *output == "" || *version == "" {
 		flag.Usage()
 		os.Exit(2)
 	}
-	if err := writeResources(*iconPath, *output, *name, *version); err != nil {
+	if err := writeResources(*iconPath, *output, *name, *version, *productVersion); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func writeResources(iconPath, output, name, version string) error {
-	versionInfo, err := versionResource(name, version)
+func writeResources(iconPath, output, name, version, productVersion string) error {
+	versionInfo, err := versionResource(name, version, productVersion)
 	if err != nil {
 		return err
 	}
@@ -89,10 +90,16 @@ func writeResources(iconPath, output, name, version string) error {
 	return os.WriteFile(output, dataOut.Bytes(), 0644)
 }
 
-func versionResource(name, version string) ([]byte, error) {
+func versionResource(name, version, productVersion string) ([]byte, error) {
 	parts := strings.Split(version, ".")
 	if len(parts) != 4 || name == "" || strings.ContainsRune(name, 0) || len(name) > 256 {
 		return nil, fmt.Errorf("expected a product name and a four-part version")
+	}
+	if strings.ContainsRune(productVersion, 0) || len(productVersion) > 256 {
+		return nil, fmt.Errorf("invalid product version label")
+	}
+	if productVersion == "" {
+		productVersion = version
 	}
 	var numbers [4]uint32
 	for index, part := range parts {
@@ -116,7 +123,7 @@ func versionResource(name, version string) ([]byte, error) {
 		versionBlock("InternalName", wideBytes(name), true),
 		versionBlock("OriginalFilename", wideBytes(name+".exe"), true),
 		versionBlock("ProductName", wideBytes(name), true),
-		versionBlock("ProductVersion", wideBytes(version), true),
+		versionBlock("ProductVersion", wideBytes(productVersion), true),
 	))
 	translation := bytes.NewBuffer(nil)
 	appendLE(translation, [2]uint16{0x0409, 1200}) // US English, Unicode.

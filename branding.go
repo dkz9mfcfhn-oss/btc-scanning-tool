@@ -1,7 +1,7 @@
 package main
 
 const (
-	appDisplayName = "BTC Scanning tool"
-	appVersion     = "2.56"
+	appDisplayName = "BTC scanning tool"
+	appVersion     = "V1.0"
 	appSourceURL   = "https://github.com/dkz9mfcfhn-oss/btc-scanning-tool"
 )

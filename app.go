@@ -67,6 +67,10 @@ type Job struct {
 	Error   string `json:"error"`
 }
 type App struct {
+	ntfyDailyState                          dailyReportState
+	ntfySettings, ntfyError, ntfyDailyError string
+	ntfyPushStates                          map[string]pushState
+
 	market            marketQuote
 	marketIO          sync.Mutex
 	marketNext        time.Time
@@ -122,6 +126,7 @@ func newAppContext(ctx context.Context, dir string, demo bool) (*App, error) {
 	a := &App{password: "admin", dir: dir, demo: demo, db: db, devices: map[string]*Device{}, config: Config{ExceptionFirst: true, Username: "admin", Concurrency: 24, TimeoutSeconds: 4}, nextPoll: time.Now().Add(interval), probe: miner.Probe, discover: minerPortReachable}
 	a.storageError = db.Warning()
 	a.loadPush()
+	a.loadNTFY()
 	a.loadDailyReport()
 	a.loadCloudIdentity()
 	p, err := os.ReadFile(filepath.Join(dir, "settings.json"))

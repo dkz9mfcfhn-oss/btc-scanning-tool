@@ -1,6 +1,8 @@
-# BTC scanning tool V1.2 Windows native desktop
+# BTC scanning tool V1.3 Windows native desktop
 
 Windows 10/11 x64 standalone GUI. Native Win32 controls and GDI; no browser or external runtime is required by the Windows executable. `main.go` is the separate non-Windows legacy test/demo entry point, excluded by build constraints on Windows.
+
+V1.3 adds hosted ntfy.sh for Android alerts and the morning report. Configure and test it in Phone alerts. Cloud watchdog alerts still use the supported Bark service.
 
 V1.2 accumulates matched net income from the most recent 08:00 Beijing time until the next 08:00. The earnings details show the period and the time through which it has been calculated. The morning report covers the completed period.
 
@@ -81,7 +83,7 @@ Build on Windows (Go 1.24+):
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
 $env:CGO_ENABLED = "0"
-go build -trimpath -ldflags="-s -w -H windowsgui" -o BTC-scanning-tool-V1.2.exe .
+go build -trimpath -ldflags="-s -w -H windowsgui" -o BTC-scanning-tool-V1.3.exe .
 ```
 
 Run `go test -race ./...` on a race-supported host. Cross-platform static check: `GOOS=windows GOARCH=amd64 go vet -unsafeptr=false ./...`. Native Win32 callback LPARAM conversions intentionally use unsafe pointers.
@@ -102,4 +104,4 @@ No physical miner or Windows runtime validation has been completed in this devel
 
 2.25: embedded native icon, close-to-tray, explicit tray exit and Explorer restart handling. History disk retention is three UTC calendar dates; memory remains 25 hours. A minute maintenance ticker cleans even while paused. No notification service is enabled.
 
-Run `swift tools/make_icon_options.swift /path/to/options --round2` on macOS to generate the icon candidates. Use `04-goldscope.ico` and the matching PNG as `assets/minewatch.ico` and `assets/minewatch.png`. Windows builds link `icon_windows_amd64.syso`. To rebuild it for V1.2, compile the helper with `go -C tools/windows_resources build -o /absolute/path/windows_resources .` and run `windows_resources -ico assets/minewatch.ico -name "BTC scanning tool" -version 1.2.0.0 -product-version V1.2 -o icon_windows_amd64.syso`. Verify the EXE with `python3 tools/verify_windows_icon.py BTC-scanning-tool-V1.2.exe assets/minewatch.ico "BTC scanning tool" 1.2.0.0 V1.2`.
+Run `swift tools/make_icon_options.swift /path/to/options --round2` on macOS to generate the icon candidates. Use `04-goldscope.ico` and the matching PNG as `assets/minewatch.ico` and `assets/minewatch.png`. Windows builds link `icon_windows_amd64.syso`. To rebuild it for V1.3, compile the helper with `go -C tools/windows_resources build -o /absolute/path/windows_resources .` and run `windows_resources -ico assets/minewatch.ico -name "BTC scanning tool" -version 1.3.0.0 -product-version V1.3 -o icon_windows_amd64.syso`. Verify the EXE with `python3 tools/verify_windows_icon.py BTC-scanning-tool-V1.3.exe assets/minewatch.ico "BTC scanning tool" 1.3.0.0 V1.3`.

@@ -146,17 +146,37 @@ func (a *App) loadPush() {
 	a.pushURL = string(raw)
 }
 
+// These helpers are called with a.mu held.
+func (a *App) pushChannel(android bool) (string, *map[string]pushState, *string) {
+	if android {
+		return a.ntfySettings, &a.ntfyPushStates, &a.ntfyError
+	}
+	return a.pushURL, &a.pushStates, &a.pushError
+}
+
+func sendPhonePush(ctx context.Context, android bool, endpoint, title, body string) error {
+	if android {
+		return sendNTFY(ctx, endpoint, title, body)
+	}
+	return sendPush(ctx, endpoint, title, body)
+}
+
 // Called once per completed scan, outside the worker pool. Only known devices
 // that have previously succeeded in this session are eligible for an outage.
 func (a *App) notifyScan(ctx context.Context, ips []string) {
+	a.notifyScanChannel(ctx, ips, false)
+	a.notifyScanChannel(ctx, ips, true)
+}
+
+func (a *App) notifyScanChannel(ctx context.Context, ips []string, android bool) {
 	a.mu.Lock()
-	endpoint := a.pushURL
+	endpoint, states, status := a.pushChannel(android)
 	if endpoint == "" || a.demo || ctx.Err() != nil {
 		a.mu.Unlock()
 		return
 	}
-	if a.pushStates == nil {
-		a.pushStates = map[string]pushState{}
+	if *states == nil {
+		*states = map[string]pushState{}
 	}
 	events := []pushEvent{}
 	for _, ip := range ips {
@@ -164,8 +184,8 @@ func (a *App) notifyScan(ctx context.Context, ips []string) {
 		if d == nil || d.Hidden || d.Latest == nil {
 			continue
 		}
-		s, title := pushSampleTransition(a.pushStates[ip], d.Latest)
-		a.pushStates[ip] = s
+		s, title := pushSampleTransition((*states)[ip], d.Latest)
+		(*states)[ip] = s
 		if title != "" {
 			body := phoneAlertBody(d, time.Now())
 			events = append(events, pushEvent{IP: ip, Title: title, Body: body, Offline: !d.Latest.Online, Zero: title == "无算力"})
@@ -178,25 +198,27 @@ func (a *App) notifyScan(ctx context.Context, ips []string) {
 		}
 		a.mu.Lock()
 		d := a.devices[event.IP]
-		send := a.pushURL == endpoint && d != nil && !d.Hidden
+		current, _, _ := a.pushChannel(android)
+		send := current == endpoint && d != nil && !d.Hidden
 		a.mu.Unlock()
 		if !send {
 			continue
 		}
-		err := sendPush(ctx, endpoint, appDisplayName+" · "+event.Title, event.Body)
+		err := sendPhonePush(ctx, android, endpoint, appDisplayName+" · "+event.Title, event.Body)
 		a.mu.Lock()
-		if d := a.devices[event.IP]; a.pushURL == endpoint && d != nil && !d.Hidden {
+		current, _, _ = a.pushChannel(android)
+		if d := a.devices[event.IP]; current == endpoint && d != nil && !d.Hidden {
 			if err != nil {
-				a.pushError = err.Error()
+				*status = err.Error()
 			} else {
-				a.pushError = ""
-				s := a.pushStates[event.IP]
+				*status = ""
+				s := (*states)[event.IP]
 				if event.Title == "无算力" || event.Title == "算力恢复" {
 					s.ZeroNotified = event.Zero
 				} else {
 					s.Notified = event.Offline
 				}
-				a.pushStates[event.IP] = s
+				(*states)[event.IP] = s
 			}
 		}
 		a.mu.Unlock()

@@ -110,28 +110,41 @@ func dailyReportBody(state dailyReportState, index int, hidden map[string]bool) 
 	return fmt.Sprintf("%s — %s（北京时间）\n24h实时算力时长加权均值；缺测不计零。\n\n%s\n\n%d/%d 页", state.End.Add(-24*time.Hour).In(reportZone).Format("01-02 15:04"), state.End.In(reportZone).Format("01-02 15:04"), strings.Join(rows, "\n\n"), index+1, len(state.Parts))
 }
 
+func (a *App) dailyChannel(android bool) (string, *dailyReportState, *string, string) {
+	if android {
+		return a.ntfySettings, &a.ntfyDailyState, &a.ntfyDailyError, "android-daily-report.json"
+	}
+	return a.pushURL, &a.dailyState, &a.dailyError, "daily-report.json"
+}
+
 func (a *App) loadDailyReport() {
-	data, err := os.ReadFile(filepath.Join(a.dir, "daily-report.json"))
+	a.loadDailyChannel(false)
+	a.loadDailyChannel(true)
+}
+
+func (a *App) loadDailyChannel(android bool) {
+	_, target, status, filename := a.dailyChannel(android)
+	data, err := os.ReadFile(filepath.Join(a.dir, filename))
 	if os.IsNotExist(err) {
 		return
 	}
 	if err != nil || len(data) > 4<<20 {
-		a.dailyError = "日报发送记录无法读取"
+		*status = "日报发送记录无法读取"
 		return
 	}
 	var state dailyReportState
 	if json.Unmarshal(data, &state) != nil || state.Next < 0 || state.Next > len(state.Parts) {
-		a.dailyError = "日报发送记录无效"
+		*status = "日报发送记录无效"
 		return
 	}
-	a.dailyState = state
+	*target = state
 }
-func (a *App) saveDailyReportLocked() error {
-	data, err := json.Marshal(a.dailyState)
+func (a *App) saveDailyReportLocked(state *dailyReportState, filename string) error {
+	data, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(a.dir, "daily-report.json")
+	path := filepath.Join(a.dir, filename)
 	if err = os.WriteFile(path+".tmp", data, 0600); err != nil {
 		return err
 	}
@@ -144,10 +157,14 @@ func (a *App) maybeDailyReport(ctx context.Context, now time.Time) {
 		return
 	}
 	a.mu.Lock()
-	endpoint := a.pushURL
-	endpointID := fmt.Sprintf("%x", sha256.Sum256([]byte(endpoint)))
-	done := a.dailyState.Day == end.Format("2006-01-02") && a.dailyState.EndpointID == endpointID && a.dailyState.Next >= len(a.dailyState.Parts)
-	if a.demo || endpoint == "" || a.dailyRunning || done || now.Before(a.dailyNextAttempt) {
+	bark, barkState, _, _ := a.dailyChannel(false)
+	android, androidState, _, _ := a.dailyChannel(true)
+	pending := func(endpoint string, state *dailyReportState) bool {
+		id := fmt.Sprintf("%x", sha256.Sum256([]byte(endpoint)))
+		return endpoint != "" && (state.Day != end.Format("2006-01-02") || state.EndpointID != id || state.Next < len(state.Parts))
+	}
+	sendBark, sendAndroid := pending(bark, barkState), pending(android, androidState)
+	if a.demo || a.dailyRunning || !(sendBark || sendAndroid) || now.Before(a.dailyNextAttempt) {
 		a.mu.Unlock()
 		return
 	}
@@ -169,21 +186,41 @@ func (a *App) maybeDailyReport(ctx context.Context, now time.Time) {
 	go func() {
 		defer a.jobs.Done()
 		defer func() { a.mu.Lock(); a.dailyRunning = false; a.mu.Unlock() }()
-		err := a.sendDailyReport(ctx, end, endpoint)
-		a.mu.Lock()
-		if err != nil {
-			a.dailyError = "算力日报：" + err.Error()
-		} else {
-			a.dailyError = ""
+		if sendBark {
+			a.deliverDailyChannel(ctx, end, bark, false)
 		}
-		a.mu.Unlock()
+		if sendAndroid {
+			a.deliverDailyChannel(ctx, end, android, true)
+		}
 	}()
 }
 
+func (a *App) deliverDailyChannel(ctx context.Context, end time.Time, endpoint string, android bool) {
+	err := a.sendDailyChannel(ctx, end, endpoint, android)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	configured, _, status, _ := a.dailyChannel(android)
+	if configured == endpoint {
+		*status = ""
+		if err != nil {
+			*status = "算力日报：" + err.Error()
+		}
+	}
+}
+
 func (a *App) sendDailyReport(ctx context.Context, end time.Time, endpoint string) error {
+	return a.sendDailyChannel(ctx, end, endpoint, false)
+}
+
+func (a *App) sendDailyChannel(ctx context.Context, end time.Time, endpoint string, android bool) error {
 	endpointID := fmt.Sprintf("%x", sha256.Sum256([]byte(endpoint)))
 	a.mu.Lock()
-	current := a.dailyState
+	configured, target, _, filename := a.dailyChannel(android)
+	if configured != endpoint {
+		a.mu.Unlock()
+		return nil
+	}
+	current := *target
 	prepare := current.Day != end.Format("2006-01-02") || current.EndpointID != endpointID ||
 		(current.WindowVersion < dailyWindowVersion && current.Next == 0 && len(current.Parts) > 0)
 	tariff, poolFee, quote := a.config.ElectricityCNY, a.config.PoolFeePercent, a.market
@@ -214,11 +251,16 @@ func (a *App) sendDailyReport(ctx context.Context, end time.Time, endpoint strin
 		}
 		state.Market, state.Tariff, state.PoolFeePercent = quote, tariff, poolFee
 		a.mu.Lock()
-		old := a.dailyState
-		a.dailyState = state
-		err = a.saveDailyReportLocked()
+		configured, _, _, _ := a.dailyChannel(android)
+		if configured != endpoint {
+			a.mu.Unlock()
+			return nil
+		}
+		old := *target
+		*target = state
+		err = a.saveDailyReportLocked(target, filename)
 		if err != nil {
-			a.dailyState = old
+			*target = old
 		}
 		a.mu.Unlock()
 		if err != nil {
@@ -230,8 +272,9 @@ func (a *App) sendDailyReport(ctx context.Context, end time.Time, endpoint strin
 			return ctx.Err()
 		}
 		a.mu.Lock()
-		state := a.dailyState
-		if a.pushURL != endpoint || state.EndpointID != endpointID {
+		state := *target
+		configured, _, _, _ := a.dailyChannel(android)
+		if configured != endpoint || state.EndpointID != endpointID {
 			a.mu.Unlock()
 			return nil
 		}
@@ -247,7 +290,9 @@ func (a *App) sendDailyReport(ctx context.Context, end time.Time, endpoint strin
 		body := dailyReportBody(state, state.Next, hidden)
 		sender := a.dailySender
 		if sender == nil {
-			sender = sendPush
+			sender = func(ctx context.Context, endpoint, title, body string) error {
+				return sendPhonePush(ctx, android, endpoint, title, body)
+			}
 		}
 		a.mu.Unlock()
 		if body != "" {
@@ -256,8 +301,8 @@ func (a *App) sendDailyReport(ctx context.Context, end time.Time, endpoint strin
 			}
 		}
 		a.mu.Lock()
-		a.dailyState.Next++
-		err := a.saveDailyReportLocked()
+		target.Next++
+		err := a.saveDailyReportLocked(target, filename)
 		a.mu.Unlock()
 		if err != nil {
 			return fmt.Errorf("发送成功，但进度保存失败")

@@ -2,6 +2,13 @@ package main
 
 // Chinese labels are the default. Keys also serve as readable source text.
 var translations = map[string][2]string{
+	"手机提醒 · Bark / ntfy.sh": {"Phone alerts · Bark / ntfy.sh", "Уведомления · Bark / ntfy.sh"},
+	"关闭 Bark":               {"Disable Bark", "Отключить Bark"},
+	"安卓 ntfy.sh 设置":         {"Android ntfy.sh settings", "Настройки ntfy.sh для Android"},
+	"安卓测试":                  {"Test Android", "Тест Android"},
+	"安卓提醒设置已保存":             {"Android alert settings saved", "Настройки Android сохранены"},
+	"填入安卓 ntfy 已订阅的主题名。免费主题请随机生成至少 16 位；私有主题在空格后填写访问令牌。留空保存可关闭安卓提醒。保存后点「安卓测试」。": {"Enter your subscribed ntfy topic. Use at least 16 random characters for a free topic. For a private topic, add a space and an access token. Save an empty field to disable. Then use Test Android.", "Введите тему ntfy. Для открытой темы используйте не менее 16 случайных символов. Для закрытой добавьте токен через пробел. Пустое поле отключает уведомления. Затем нажмите «Тест Android»."},
+
 	"软件来源": {"GitHub source", "Код на GitHub"},
 	"无法打开软件来源（系统错误 %d）。\r\n%s": {"Could not open the source repository (error %d).\r\n%s", "Не удалось открыть репозиторий (ошибка %d).\r\n%s"},
 	"IP：从小到大":                  {"IP: ascending", "IP по возрастанию"},

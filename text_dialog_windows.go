@@ -25,7 +25,7 @@ func refreshTextDialogLabels() {
 	txt(textDialog.cancel, tr("取消"))
 }
 
-func openTextDialog(title, titleSuffix, help, initial string, save func(string) error) {
+func openTextDialog(title, titleSuffix, help, initial string, save func(string) error, masked ...bool) {
 	if textDialog.h != 0 {
 		call(user, "SetForegroundWindow", textDialog.h)
 		return
@@ -47,7 +47,11 @@ func openTextDialog(title, titleSuffix, help, initial string, save func(string) 
 		return v
 	}
 	textDialog.help = child("STATIC", "", 0, 0, 18, 18, 590, 65)
-	textDialog.edit = child("EDIT", initial, 0x00800080, 91, 18, 94, 590, 34)
+	editStyle := uintptr(0x00800080)
+	if len(masked) != 0 && masked[0] {
+		editStyle |= 0x20 // ES_PASSWORD
+	}
+	textDialog.edit = child("EDIT", initial, editStyle, 91, 18, 94, 590, 34)
 	send.Call(textDialog.edit, 0xc5, 200, 0)
 	textDialog.confirm = child("BUTTON", "", 0x0b, 92, 365, 162, 115, 34)
 	textDialog.cancel = child("BUTTON", "", 0x0b, 93, 493, 162, 115, 34)

@@ -22,14 +22,15 @@ var phoneLabels = [...]struct {
 	{72, "每天 08:00（北京时间）发送前24小时算力、预估净收益、矿池费和电费。"},
 	{73, "隐藏矿机不进入日报；需保持程序运行。当天晚启动会补发。"},
 	{74, "每10分钟心跳，超过25分钟失联提醒。检修或主动退出前可暂停看护。"},
-	{82, "保存并启用"}, {83, "发送测试"}, {84, "关闭全部提醒"},
+	{82, "保存并启用"}, {83, "发送测试"}, {84, "关闭 Bark"},
+	{86, "安卓 ntfy.sh 设置"}, {87, "安卓测试"},
 }
 
 func refreshPhoneLabels() {
 	if phone.window == 0 {
 		return
 	}
-	txt(phone.window, tr("iPhone 手机提醒"))
+	txt(phone.window, tr("手机提醒 · Bark / ntfy.sh"))
 	for _, label := range phoneLabels {
 		txt(call(user, "GetDlgItem", phone.window, label.id), tr(label.text))
 	}
@@ -44,7 +45,7 @@ func openPhone() {
 	instance := call(kernel, "GetModuleHandleW", 0)
 	cls := wc{Size: uint32(unsafe.Sizeof(wc{})), Proc: syscall.NewCallback(phoneProc), Instance: instance, Cursor: call(user, "LoadCursorW", 0, 32512), Name: wide("MineWatchPhone"), Icon: tray.icon, SmallIcon: tray.smallIcon}
 	call(user, "RegisterClassExW", uintptr(unsafe.Pointer(&cls)))
-	h := newNativeWindow(cls.Name, tr("iPhone 手机提醒"), 0x00cf0000, desktop.h, instance, 740, 440, 712, 390)
+	h := newNativeWindow(cls.Name, tr("手机提醒 · Bark / ntfy.sh"), 0x00cf0000, desktop.h, instance, 740, 514, 712, 458)
 	if h == 0 {
 		return
 	}
@@ -63,6 +64,9 @@ func openPhone() {
 	note := desktop.app.pushError
 	cloudStatus := desktop.app.cloudStatus
 	cloudDisabled := desktop.app.config.CloudWatchDisabled
+	if desktop.app.ntfyError != "" || desktop.app.ntfyDailyError != "" {
+		note += " · ntfy.sh " + desktop.app.ntfyError + " " + desktop.app.ntfyDailyError
+	}
 	if desktop.app.dailyError != "" {
 		note += " " + desktop.app.dailyError
 	}
@@ -78,6 +82,8 @@ func openPhone() {
 	}
 	phone.cloudButton = child("BUTTON", cloudLabel, 0x0b, 85, 18, 300, 150, 34)
 	child("STATIC", "", 0, 74, 18, 344, 675, 25)
+	child("BUTTON", "", 0x0b, 86, 18, 395, 180, 34)
+	child("BUTTON", "", 0x0b, 87, 214, 395, 136, 34)
 	phone.status = child("STATIC", currentLanguage().diagnostic(note), 0, 0, 18, 224, 675, 30)
 	child("BUTTON", "", 0x0b, 82, 18, 258, 140, 34)
 	child("BUTTON", "", 0x0b, 83, 173, 258, 125, 34)
@@ -165,8 +171,32 @@ func phoneProc(h uintptr, m uint32, w, l uintptr) uintptr {
 			} else {
 				txt(phone.status, tr("手机提醒已关闭"))
 			}
-		case 83:
-			endpoint, e := validatePushURL(value(phone.edit))
+		case 86:
+			a := desktop.app
+			a.mu.Lock()
+			initial := a.ntfySettings
+			a.mu.Unlock()
+			openTextDialog("安卓 ntfy.sh 设置", "", "填入安卓 ntfy 已订阅的主题名。免费主题请随机生成至少 16 位；私有主题在空格后填写访问令牌。留空保存可关闭安卓提醒。保存后点「安卓测试」。", initial, func(raw string) error {
+				if err := a.setNTFY(raw); err != nil {
+					return err
+				}
+				if phone.window != 0 {
+					txt(phone.status, tr("安卓提醒设置已保存"))
+				}
+				return nil
+			}, true)
+		case 83, 87:
+			android := w&65535 == 87
+			var endpoint string
+			var e error
+			if android {
+				desktop.app.mu.Lock()
+				endpoint = desktop.app.ntfySettings
+				desktop.app.mu.Unlock()
+				_, _, e = parseNTFY(endpoint)
+			} else {
+				endpoint, e = validatePushURL(value(phone.edit))
+			}
 			if e != nil {
 				txt(phone.status, currentLanguage().diagnostic(e.Error()))
 				break
@@ -175,7 +205,7 @@ func phoneProc(h uintptr, m uint32, w, l uintptr) uintptr {
 			txt(phone.status, tr("正在发送测试…"))
 			go func() {
 				note := tr("服务器已接受测试通知，请确认手机是否收到")
-				if e := sendPush(context.Background(), endpoint, appDisplayName+tr(" · 测试"), tr("手机提醒连接测试")); e != nil {
+				if e := sendPhonePush(context.Background(), android, endpoint, appDisplayName+tr(" · 测试"), tr("手机提醒连接测试")); e != nil {
 					note = e.Error()
 				}
 				select {

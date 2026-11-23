@@ -1,4 +1,4 @@
-BTC scanning tool V1.0 uses the Go standard library and runtime; no external Go modules are linked.
+BTC scanning tool uses the Go standard library and runtime. No external Go modules are linked.
 The following notices are retained for the previously distributed 2.33 build.
 
 MineWatch 2.33 third-party licenses

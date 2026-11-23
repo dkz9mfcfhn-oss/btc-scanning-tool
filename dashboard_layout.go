@@ -25,6 +25,7 @@ const dashboardCardGap int32 = 8
 const dashboardCardHeight int32 = 112
 const profitCardIndex = 4
 const profitDetailSize = 11
+const compactProfitButtonWidth = 34
 const dashboardNumberSize = 36
 
 type cardWidths [5]int32
@@ -55,7 +56,11 @@ func dashboardGeometryWithWidths(w, h int32, full bool, widths cardWidths) dashb
 	g.Cards = dashboardCards(inset, cardY, w-2*inset, widths)
 	g.Controls[sourceCommand] = uiBox{203, 50, 116, 24}
 	profit := g.Cards[profitCardIndex]
-	g.Controls[profitSettingsCommand] = uiBox{profit.X + profit.W - 104, profit.Y + profit.H - 31, 94, 23}
+	buttonWidth := int32(94)
+	if profit.W < 250 {
+		buttonWidth = compactProfitButtonWidth
+	}
+	g.Controls[profitSettingsCommand] = uiBox{profit.X + profit.W - buttonWidth - 10, profit.Y + profit.H - 31, buttonWidth, 23}
 	// Keep enough room for the list header, rows, and chart labels even in a
 	// very short window. Only the overflow goes into the vertical scroll range.
 	const minTable, minChart, gap = 96, 124, 14

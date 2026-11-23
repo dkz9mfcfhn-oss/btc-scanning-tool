@@ -20,7 +20,7 @@ func TestProfitTracksActualCoveredIntervals(t *testing.T) {
 	start := end.Add(-time.Hour)
 	ip := "192.168.1.2"
 	rec := func(at time.Time, rate, power *float64, source string) store.Record {
-		return store.Record{IP: ip, Sample: store.Sample{At: at, Online: true, IntervalSeconds: 300, RealtimeTH: rate, PowerW: power, PowerSource: source}}
+		return store.Record{IP: ip, Sample: store.Sample{At: at, Online: true, IntervalSeconds: 300, RealtimeTH: rate, PowerW: power, PowerSource: source, RejectPercent: num(10)}}
 	}
 	if err := a.db.Append([]store.Record{
 		rec(start.Add(-time.Minute), num(100), num(3000), "WALLPOWER"),
@@ -39,21 +39,103 @@ func TestProfitTracksActualCoveredIntervals(t *testing.T) {
 	q := marketQuote{At: end, Height: 976000, Difficulty: 135e12, BTCCNY: 400000}
 	var farm farmAverage
 	farm.add(rolling.MeanTH, rolling.Covered.Hours())
-	p := estimateProfit(farm, sampleProfit(rolling), q, num(0.5), 2.5)
-	if !p.Partial || p.Gross == nil || p.PoolFee == nil || p.Electricity == nil || p.Net == nil || math.Abs(*p.Electricity-0.1) > 1e-9 || math.Abs(*p.Net-(0.012*q.CNYPerEH()*0.975-0.1)) > 1e-9 || math.Abs(*p.PoolFee-*p.Gross*0.025) > 1e-9 {
+	p := estimateProfit(farm, sampleProfit(rolling), q, num(0.5), 2.5, time.Hour)
+	pairedGross := 0.012 * q.CNYPerEH()
+	if !p.Partial || p.Gross == nil || p.PairedGross == nil || p.PoolFee == nil || p.Electricity == nil || p.PairedElectricity == nil || p.Net == nil || p.RejectPercent == nil || p.RejectionLoss == nil {
 		t.Fatal(p)
+	}
+	for name, values := range map[string][2]float64{
+		"paired gross": {*p.PairedGross, pairedGross}, "paired power cost": {*p.PairedElectricity, 0.1},
+		"rejection rate": {*p.RejectPercent, 10}, "rejection coverage": {p.RejectCoverage, 1}, "rejection loss": {*p.RejectionLoss, pairedGross * 0.1},
+		"paired fee": {*p.PoolFee, pairedGross * 0.9 * 0.025}, "net": {*p.Net, pairedGross*0.9*0.975 - 0.1},
+	} {
+		if math.Abs(values[0]-values[1]) > 1e-9 {
+			t.Errorf("%s: got %g want %g", name, values[0], values[1])
+		}
 	}
 	state := buildDailyReport([]*Device{{IP: ip}}, retained, end, "fixture")
 	state.Market, state.Tariff, state.PoolFeePercent = q, num(0.5), 2.5
 	body := dailyReportBody(state, 0, nil)
-	if !strings.Contains(body, "电费：¥0.10") || !strings.Contains(body, "配对净收益：") || !strings.Contains(body, "0.20 度") || !strings.Contains(body, "矿池手续费（2.5%）") || !strings.Contains(body, "手动功率估算：1 台 · 0.10 度") {
+	if !strings.Contains(body, "配对电费：¥0.10") || !strings.Contains(body, "配对净收益：") || !strings.Contains(body, "0.20 度") || !strings.Contains(body, "配对矿池手续费（2.5%）") || !strings.Contains(body, "拒绝率：10.00% · 收入扣减：") || !strings.Contains(body, "手动功率估算：1 台 · 0.10 度") {
 		t.Fatal(body)
 	}
-	if p := estimateProfit(farm, sampleProfit(rolling), q, nil, 0); p.Net != nil || p.Electricity != nil || p.Gross == nil {
+	if p := estimateProfit(farm, sampleProfit(rolling), q, nil, 0, time.Hour); p.Net != nil || p.Electricity != nil || p.Gross == nil {
 		t.Fatal("missing tariff substituted with free electricity", p)
 	}
-	if p := estimateProfit(farm, sampleProfit(rolling), marketQuote{}, num(0.5), 2.5); p.Net != nil || p.Gross != nil || p.Electricity == nil || p.PoolFee != nil {
+	if p := estimateProfit(farm, sampleProfit(rolling), marketQuote{}, num(0.5), 2.5, time.Hour); p.Net != nil || p.Gross != nil || p.Electricity == nil || p.PoolFee != nil {
 		t.Fatal("missing market quote hid energy cost or produced revenue", p)
+	}
+}
+
+func TestProfitDeductsOnlyKnownRejectedWork(t *testing.T) {
+	var farm farmAverage
+	farm.add(100, 1)
+	samples := profitSamples{PowerSeconds: 3600, MatchedSeconds: 3600, EnergyKWh: 3, MatchedKWh: 3, MatchedWorkEH: 0.36, RejectCoveredWorkEH: 0.09, RejectedWorkEH: 0.009}
+	q := marketQuote{Height: 976000, Difficulty: 135e12, BTCCNY: 400000}
+	p := estimateProfit(farm, samples, q, num(0.5), 2, time.Hour)
+	if p.RejectPercent == nil || p.rejectRateText() != "10.00%" || p.RejectCoverage != 0.25 || p.Net == nil || math.Abs(*p.Net-(0.351*q.CNYPerEH()*0.98-1.5)) > 1e-9 {
+		t.Fatal(p)
+	}
+	if report := chinese.profitReportText(farm, samples, q, num(0.5), 2, time.Hour); !strings.Contains(report, "拒绝率覆盖：25.0%") {
+		t.Fatal(report)
+	}
+	samples.RejectCoveredWorkEH, samples.RejectedWorkEH = 0, 0
+	p = estimateProfit(farm, samples, q, num(0.5), 2, time.Hour)
+	if p.RejectPercent != nil || p.RejectionLoss != nil || p.rejectRateText() != "—" || p.Net == nil {
+		t.Fatal("missing rejection data must remain unknown", p)
+	}
+	samples.RejectCoveredWorkEH = samples.MatchedWorkEH
+	samples.RejectedWorkEH = samples.MatchedWorkEH
+	p = estimateProfit(farm, samples, q, num(0.5), 2, time.Hour)
+	if p.PoolFee == nil || *p.PoolFee != 0 || p.Net == nil || *p.Net != -1.5 {
+		t.Fatal("100% rejection must leave only the power bill", p)
+	}
+}
+
+func TestDashboardEarningsRollOverAtEightBeijing(t *testing.T) {
+	db, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	cutoff := time.Now().UTC().Truncate(24 * time.Hour)
+	ip := "192.168.1.2"
+	hidden := "192.168.1.3"
+	record := func(ip string, at time.Time, rate, power float64) store.Record {
+		return store.Record{IP: ip, Sample: store.Sample{At: at, Online: true, IntervalSeconds: 300, RealtimeTH: num(rate), PowerW: num(power), RejectPercent: num(10)}}
+	}
+	if err := db.Append([]store.Record{
+		record(ip, cutoff.Add(-time.Hour), 900, 3000),
+		record(ip, cutoff.Add(-2*time.Minute), 100, 3000), // The interval straddles 08:00.
+		record(ip, cutoff.Add(3*time.Minute), 200, 6000),
+		record(hidden, cutoff, 99999, 99999),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	devices := []*Device{{IP: ip}, {IP: hidden, Hidden: true}}
+	var dashboard rollingFarmAverage
+	dashboard.refresh(cutoff.Add(-time.Second), devices, db)
+	previous := dashboard.earnings
+	if !previous.start.Equal(cutoff.Add(-farmAverageWindow)) || previous.profit.MatchedWorkEH <= 0 {
+		t.Fatalf("before cutoff: %+v", previous)
+	}
+	dashboard.refresh(cutoff, devices, db)
+	if current := dashboard.earnings; !current.start.Equal(cutoff) || current.start.Hour() != 8 || current.profit.MatchedWorkEH != 0 || dashboard.average.WorkEH < 0.28 {
+		t.Fatalf("at cutoff: %+v; rolling average: %+v", current, dashboard.average)
+	}
+	now := cutoff.Add(5 * time.Minute)
+	dashboard.refresh(now, devices, db)
+	current := dashboard.earnings
+	if current.average.Devices != 1 || current.profit.MatchedSeconds != 300 || math.Abs(current.profit.MatchedWorkEH-0.042) > 1e-9 || math.Abs(current.profit.MatchedKWh-0.35) > 1e-9 || math.Abs(dashboard.average.WorkEH-0.324) > 1e-9 {
+		t.Fatalf("after cutoff: %+v; rolling average: %+v", current, dashboard.average)
+	}
+	q := marketQuote{At: now, Height: 976000, Difficulty: 135e12, BTCCNY: 400000}
+	if details := chinese.earningsPeriodDetails(current, q, num(0.5), 2); !strings.Contains(details, "08:05") || !strings.Contains(details, "08:00（北京时间）") || !strings.Contains(details, "配对覆盖：100.0%") {
+		t.Fatal(details)
+	}
+	finished, err := db.RetainedHashrateAverages(context.Background(), []string{ip}, cutoff.Add(-farmAverageWindow), cutoff)
+	if err != nil || math.Abs(finished[ip].MatchedWorkEH-0.282) > 1e-9 {
+		t.Fatalf("finished period: %+v, %v", finished, err)
 	}
 }
 

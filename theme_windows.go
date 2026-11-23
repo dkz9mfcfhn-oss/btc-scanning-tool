@@ -207,7 +207,7 @@ func paintDashboard(h uintptr) {
 			fill(dc, rect{track.L, track.T, track.L + int32(float64(track.R-track.L)*coverage[i]/float64(t.Count)), track.B}, mixColor(panel, colors[i], 62))
 		}
 	}
-	paintEconomics(dc, g, t, desktop.average24, dashboardQuote(quote, demo), tariff, poolFee)
+	paintEconomics(dc, g, t, desktop.average24.earnings, dashboardQuote(quote, demo), tariff, poolFee)
 	for i := range len(g.Cards) - 1 {
 		d := cardDivider(g.Cards, i)
 		color := mixColor(panel, muted, 46)
@@ -320,7 +320,13 @@ func paintButton(ptr uintptr) {
 	if d.ID == profitSettingsCommand {
 		font = ui.profitDetailFont
 	}
-	paintIconLabel(d.DC, r, title, font, fg, iconColor, commandIcon(d.ID, title), 16)
+	icon := commandIcon(d.ID, title)
+	if d.ID == profitSettingsCommand && d.R.R-d.R.L <= compactProfitButtonWidth+2 {
+		const size = 16
+		paintInterfaceIcon(d.DC, uiBox{(r.L + r.R - size) / 2, (r.T + r.B - size) / 2, size, size}, icon, iconColor)
+	} else {
+		paintIconLabel(d.DC, r, title, font, fg, iconColor, icon, 16)
+	}
 	if d.State&0x10 != 0 {
 		r.L += 3
 		r.T += 3

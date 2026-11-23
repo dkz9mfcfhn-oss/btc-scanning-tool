@@ -57,3 +57,41 @@ func TestHashrateWindowIgnoresInvalidAndOfflineReadings(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestMatchedRejectionUsesCounterDeltasAndReportedPercent(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	end := time.Now().UTC().Truncate(time.Hour)
+	start := end.Add(-25 * time.Minute)
+	value := func(v float64) *float64 { return &v }
+	record := func(minutes int, rate, elapsed, accepted, rejected float64) Record {
+		return Record{IP: "miner", Sample: Sample{At: start.Add(time.Duration(minutes) * time.Minute), Online: true,
+			IntervalSeconds: 300, RealtimeTH: value(rate), PowerW: value(3000), ElapsedSeconds: value(elapsed),
+			Accepted: value(accepted), Rejected: value(rejected)}}
+	}
+	rows := []Record{
+		record(0, 100, 20000, 900, 100),
+		record(5, 300, 20300, 940, 110),
+		record(10, 100, 50, 1000, 120), // Uptime reset invalidates the previous delta even if counters increased.
+		record(15, 100, 350, 5, 1),     // Counter reset invalidates the previous delta. Use the reported rate instead.
+		record(20, 200, 650, 105, 1),   // 0% is an observed value.
+		record(25, 999, 950, 180, 26),  // End point closes the preceding interval without adding its own work.
+	}
+	rows[0].Sample.RejectPercent = value(95) // The interval delta takes precedence.
+	rows[2].Sample.RejectPercent = value(10)
+	if err := s.Append(rows); err != nil {
+		t.Fatal(err)
+	}
+	ips := []string{"miner"}
+	mem := s.RecentHashrateAverages(ips, start, end)["miner"]
+	disk, err := s.RetainedHashrateAverages(context.Background(), ips, start, end)
+	if err != nil || mem != disk["miner"] {
+		t.Fatal(mem, disk, err)
+	}
+	if mem.Matched != 25*time.Minute || math.Abs(mem.MatchedWorkEH-0.24) > 1e-9 || math.Abs(mem.RejectCoveredWorkEH-0.15) > 1e-9 || math.Abs(mem.RejectedWorkEH-0.024) > 1e-9 {
+		t.Fatalf("unexpected coverage or rejected work: %+v", mem)
+	}
+}

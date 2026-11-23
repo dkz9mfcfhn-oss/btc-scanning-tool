@@ -143,10 +143,12 @@ func TestExportDashboardDesignPreview(t *testing.T) {
 		text(r.X+8, r.Y+(r.H+int32(size))/2-1, labels[id], size, fg)
 	}
 	profit := g.Cards[profitCardIndex]
-	text(profit.X+12, profit.Y+27, lang.text("24 小时")+lang.text("预估净收益"), 13, p.muted)
+	text(profit.X+12, profit.Y+27, lang.profitCardCaption(profit.W), 13, p.muted)
 	text(profit.X+12, profit.Y+65, "¥682.65", dashboardNumberSize, p.ink)
 	text(profit.X+12, profit.Y+79, fmt.Sprintf(lang.text("实时功率 %.2f kW"), 128.90)+fmt.Sprintf(lang.text(" · %d/%d 台"), 18, 18)+fmt.Sprintf(lang.text(" · 手动 %d 台"), 1), profitDetailSize, p.blue)
-	text(profit.X+12, profit.Y+97, fmt.Sprintf(lang.text("矿池费 %s · 电费 %s"), "¥50.82", "¥1299.31"), profitDetailSize, p.muted)
+	fee, rejected := lang.profitCardDetails(profitEstimate{PoolFee: num(50.82), PairedElectricity: num(1299.31), RejectPercent: num(0.42), RejectionLoss: num(8.58), RejectCoverage: 1}, g.Controls[profitSettingsCommand].X-profit.X-17)
+	text(profit.X+12, profit.Y+92, fee, profitDetailSize, p.muted)
+	text(profit.X+12, profit.Y+105, rejected, profitDetailSize, p.muted)
 	for i, caption := range []string{"扫描范围 / IP 网段", "登录账号", "后台密码"} {
 		field := g.Controls[11+i]
 		text(field.X-4, field.Y-11, caption, 13, p.muted)

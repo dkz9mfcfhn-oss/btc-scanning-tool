@@ -122,7 +122,7 @@ func editElectricityTariff() {
 	if tariff != nil {
 		initial = strconv.FormatFloat(*tariff, 'f', -1, 64)
 	}
-	openTextDialog("电价设置 · 元/度", "", "例如 0.42 表示每度电 0.42 元。留空可清除；填 0 表示免电费。\r\n此电价用于最近 24 小时和每日晨报的估算。", initial, a.setElectricityTariff)
+	openTextDialog("电价设置 · 元/度", "", "例如 0.42 表示每度电 0.42 元。留空可清除；填 0 表示免电费。\r\n此电价用于本期收益及晨报的估算。", initial, a.setElectricityTariff)
 }
 
 func openProfitSettings() {
@@ -142,7 +142,7 @@ func openProfitSettings() {
 	}
 	listMenuItem(menu, 0, 1, tr("设置电价… · ")+price)
 	listMenuItem(menu, 0, 2, fmt.Sprintf(tr("设置矿池手续费… · %.4g%%"), fee))
-	listMenuItem(menu, 0, 3, tr("查看最近 24 小时收益明细…"))
+	listMenuItem(menu, 0, 3, tr("查看本期收益明细…"))
 	var r rect
 	call(user, "GetWindowRect", desktop.electricityButton, uintptr(unsafe.Pointer(&r)))
 	switch trackListMenu(menu, point{X: r.L, Y: r.B}) {
@@ -150,10 +150,10 @@ func openProfitSettings() {
 		editElectricityTariff()
 	case 2:
 		initial := strconv.FormatFloat(fee, 'f', -1, 64)
-		openTextDialog("矿池手续费 · %", "", "输入全场适用的手续费百分比，例如 2.5 表示 2.5%。\r\n净收益扣除该费用和电费。留空或填 0 表示免手续费。", initial, a.setPoolFee)
+		openTextDialog("矿池手续费 · %", "", "输入全场适用的手续费百分比，例如 2.5 表示 2.5%。\r\n先扣减拒绝份额收入，再按有效收入计算手续费。留空或填 0 表示免手续费。", initial, a.setPoolFee)
 	case 3:
-		history := desktop.average24
-		message(tr("最近 24 小时收益明细\n\n") + currentLanguage().profitReportText(history.average, history.profit, dashboardQuote(quote, demo), tariff, fee))
+		refreshNative()
+		message(currentLanguage().earningsPeriodDetails(desktop.average24.earnings, dashboardQuote(quote, demo), tariff, fee))
 	}
 }
 

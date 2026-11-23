@@ -34,7 +34,7 @@ type dailyReportState struct {
 	PoolFeePercent float64            `json:"poolFeePercent,omitempty"`
 }
 
-const dailyWindowVersion = 3
+const dailyWindowVersion = 4
 
 func dailyReportWindow(now time.Time) (time.Time, bool) {
 	local := now.In(reportZone)
@@ -93,7 +93,7 @@ func dailyReportBody(state dailyReportState, index int, hidden map[string]bool) 
 		}
 		body := fmt.Sprintf("%s — %s（北京时间）\n\n24小时平均算力合计：%s\n已采集累计运算量：%.3f EH\n有效算力：%d / %d 台\n采样覆盖：%.1f%%\n\n按各机有效时长计算均值后合计，实测零计入。", state.End.Add(-farmAverageWindow).In(reportZone).Format("01-02 15:04"), state.End.In(reportZone).Format("01-02 15:04"), rate, summary.WorkEH, summary.Valid, summary.Devices, summary.coverage()*100)
 		if state.WindowVersion >= 2 {
-			body += "\n\n" + profitReportText(summary, profit, state.Market, state.Tariff, state.PoolFeePercent)
+			body += "\n\n" + chinese.profitReportText(summary, profit, state.Market, state.Tariff, state.PoolFeePercent, farmAverageWindow)
 		}
 		return body
 	}

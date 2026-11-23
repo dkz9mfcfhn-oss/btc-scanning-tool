@@ -20,6 +20,7 @@ type HashrateAverage struct {
 	MeanTH                               float64
 	Covered                              time.Duration
 	EnergyKWh, MatchedKWh, MatchedWorkEH float64
+	RejectCoveredWorkEH, RejectedWorkEH  float64
 	ManualKWh                            float64
 	PowerCovered, Matched                time.Duration
 	ManualCovered                        time.Duration
@@ -35,6 +36,10 @@ type hashrateObservation struct {
 	PowerW          *float64  `json:"powerW"`
 	ManualPowerW    *float64  `json:"manualPowerW"`
 	PowerSource     string    `json:"powerSource"`
+	ElapsedSeconds  *float64  `json:"elapsedSeconds"`
+	Accepted        *float64  `json:"accepted"`
+	Rejected        *float64  `json:"rejected"`
+	RejectPercent   *float64  `json:"rejectPercent"`
 }
 
 type hashrateWindow struct {
@@ -43,14 +48,15 @@ type hashrateWindow struct {
 	weighted   float64
 	covered    time.Duration
 	power      HashrateAverage
+	rateOnly   bool
 }
 
 func (w *hashrateWindow) add(next hashrateObservation) {
-	w.accumulate(next.At)
+	w.accumulate(next)
 	w.previous = next
 }
 
-func (w *hashrateWindow) accumulate(nextAt time.Time) {
+func (w *hashrateWindow) accumulate(next hashrateObservation) {
 	s := w.previous
 	if !s.Online {
 		return
@@ -59,13 +65,14 @@ func (w *hashrateWindow) accumulate(nextAt time.Time) {
 	if seconds < 30 {
 		seconds = 300 // Records older than the configurable interval used five minutes.
 	}
+	interval := time.Duration(seconds) * time.Second
 	from := s.At
 	if from.Before(w.start) {
 		from = w.start
 	}
-	until := s.At.Add(time.Duration(seconds) * time.Second)
-	if nextAt.Before(until) {
-		until = nextAt
+	until := s.At.Add(interval)
+	if next.At.Before(until) {
+		until = next.At
 	}
 	if w.end.Before(until) {
 		until = w.end
@@ -79,6 +86,9 @@ func (w *hashrateWindow) accumulate(nextAt time.Time) {
 		w.covered += covered
 		w.weighted += *s.RealtimeTH * covered.Seconds()
 	}
+	if w.rateOnly {
+		return
+	}
 	if watts, manual := ResolvePower(s.PowerW, s.PowerSource, s.ManualPowerW); watts != nil && (manual || isInputPower(s.PowerSource)) {
 		kwh := *watts * covered.Hours() / 1000
 		w.power.EnergyKWh += kwh
@@ -88,11 +98,40 @@ func (w *hashrateWindow) accumulate(nextAt time.Time) {
 			w.power.ManualCovered += covered
 		}
 		if hasRate {
-			w.power.MatchedWorkEH += *s.RealtimeTH * covered.Seconds() / 1e6
+			work := *s.RealtimeTH * covered.Seconds() / 1e6
+			w.power.MatchedWorkEH += work
 			w.power.MatchedKWh += kwh
 			w.power.Matched += covered
+			if work > 0 {
+				if fraction, ok := s.rejectedFraction(next, interval); ok {
+					w.power.RejectCoveredWorkEH += work
+					w.power.RejectedWorkEH += work * fraction
+				}
+			}
 		}
 	}
+}
+
+// Cumulative counters describe the share traffic between two samples. When
+// only a firmware percentage is available, use it as an estimate for the sample.
+func (s hashrateObservation) rejectedFraction(next hashrateObservation, interval time.Duration) (float64, bool) {
+	gap := next.At.Sub(s.At)
+	restarted := validMeterValue(s.ElapsedSeconds) && validMeterValue(next.ElapsedSeconds) && *next.ElapsedSeconds < *s.ElapsedSeconds
+	if next.Online && !restarted && gap > 0 && gap <= interval+min(interval/4, time.Minute) &&
+		validShareCount(s.Accepted) && validShareCount(s.Rejected) && validShareCount(next.Accepted) && validShareCount(next.Rejected) {
+		accepted, rejected := *next.Accepted-*s.Accepted, *next.Rejected-*s.Rejected
+		if accepted >= 0 && rejected >= 0 && accepted+rejected > 0 {
+			return rejected / (accepted + rejected), true
+		}
+	}
+	if validMeterValue(s.RejectPercent) && *s.RejectPercent <= 100 {
+		return *s.RejectPercent / 100, true
+	}
+	return 0, false
+}
+
+func validShareCount(v *float64) bool {
+	return validMeterValue(v) && *v <= 9007199254740991 && math.Trunc(*v) == *v
 }
 
 func validMeterValue(v *float64) bool {
@@ -117,7 +156,7 @@ func ResolvePower(reported *float64, source string, fallback *float64) (watts *f
 }
 
 func (w *hashrateWindow) average() HashrateAverage {
-	w.accumulate(w.end)
+	w.accumulate(hashrateObservation{At: w.end})
 	result := w.power
 	if w.covered > 0 && !math.IsInf(w.weighted, 0) {
 		result.MeanTH, result.Covered = w.weighted/w.covered.Seconds(), w.covered
@@ -131,20 +170,50 @@ func (s *Store) RecentHashrateAverages(ips []string, start, end time.Time) map[s
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	result := make(map[string]HashrateAverage, len(ips))
-	since := start.Add(-maxHashrateInterval)
 	for _, ip := range ips {
-		samples := s.samples[ip]
-		first := sort.Search(len(samples), func(i int) bool { return !samples[i].At.Before(since) })
 		window := hashrateWindow{start: start, end: end}
-		for _, sample := range samples[first:] {
-			if !sample.At.Before(end) {
-				break
-			}
-			window.add(hashrateObservation{sample.At, sample.IntervalSeconds, sample.Online, sample.RealtimeTH, sample.PowerW, sample.ManualPowerW, sample.PowerSource})
-		}
+		addRecentHashrateSamples(s.samples[ip], start, end, &window)
 		result[ip] = window.average()
 	}
 	return result
+}
+
+// RecentHashrateAndProfit reads the same in-memory samples once for the rolling
+// hashrate and the earnings period, which have distinct start times.
+func (s *Store) RecentHashrateAndProfit(ips []string, hashStart, profitStart, end time.Time) (hashrate, profit map[string]HashrateAverage) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	hashrate = make(map[string]HashrateAverage, len(ips))
+	profit = make(map[string]HashrateAverage, len(ips))
+	firstStart := hashStart
+	if profitStart.Before(firstStart) {
+		firstStart = profitStart
+	}
+	for _, ip := range ips {
+		rateWindow := hashrateWindow{start: hashStart, end: end, rateOnly: true}
+		profitWindow := hashrateWindow{start: profitStart, end: end}
+		addRecentHashrateSamples(s.samples[ip], firstStart, end, &rateWindow, &profitWindow)
+		hashrate[ip], profit[ip] = rateWindow.average(), profitWindow.average()
+	}
+	return hashrate, profit
+}
+
+func addRecentHashrateSamples(samples []Sample, start, end time.Time, windows ...*hashrateWindow) {
+	since := start.Add(-maxHashrateInterval)
+	first := sort.Search(len(samples), func(i int) bool { return !samples[i].At.Before(since) })
+	for _, sample := range samples[first:] {
+		if sample.At.After(end) {
+			break
+		}
+		observation := hashrateObservation{
+			At: sample.At, IntervalSeconds: sample.IntervalSeconds, Online: sample.Online, RealtimeTH: sample.RealtimeTH,
+			PowerW: sample.PowerW, ManualPowerW: sample.ManualPowerW, PowerSource: sample.PowerSource,
+			ElapsedSeconds: sample.ElapsedSeconds, Accepted: sample.Accepted, Rejected: sample.Rejected, RejectPercent: sample.RejectPercent,
+		}
+		for _, window := range windows {
+			window.add(observation)
+		}
+	}
 }
 
 // RetainedHashrateAverages reads the JSONL files because a late morning report's
@@ -156,7 +225,7 @@ func (s *Store) RetainedHashrateAverages(ctx context.Context, ips []string, star
 	}
 	since := start.Add(-maxHashrateInterval)
 	firstDay := since.UTC().Truncate(24 * time.Hour)
-	for day := firstDay; day.Before(end); day = day.AddDate(0, 0, 1) {
+	for day := firstDay; !day.After(end); day = day.AddDate(0, 0, 1) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -217,7 +286,7 @@ func readHashrateObservations(ctx context.Context, reader io.Reader, observation
 		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
 			return err
 		}
-		if samples, selected := observations[record.IP]; selected && !record.Sample.At.Before(since) && record.Sample.At.Before(end) {
+		if samples, selected := observations[record.IP]; selected && !record.Sample.At.Before(since) && !record.Sample.At.After(end) {
 			observations[record.IP] = append(samples, record.Sample)
 		}
 	}

@@ -1,8 +1,12 @@
-# BTC scanning tool V1.0 Windows native desktop
+# BTC scanning tool V1.2 Windows native desktop
 
 Windows 10/11 x64 standalone GUI. Native Win32 controls and GDI; no browser or external runtime is required by the Windows executable. `main.go` is the separate non-Windows legacy test/demo entry point, excluded by build constraints on Windows.
 
-V1.0 is the first GitHub release. The dashboard and Windows product properties display BTC scanning tool V1.0. The Windows x64 executable is attached to the [release page](https://github.com/dkz9mfcfhn-oss/btc-scanning-tool/releases/tag/V1.0).
+V1.2 accumulates matched net income from the most recent 08:00 Beijing time until the next 08:00. The earnings details show the period and the time through which it has been calculated. The morning report covers the completed period.
+
+V1.1 shows the pool fee for the intervals used in net income and adjusts the estimate for share rejection. The dashboard and Bark morning report use the same calculation.
+
+V1.0 is the first GitHub release. The Windows x64 executable is attached to the [release page](https://github.com/dkz9mfcfhn-oss/btc-scanning-tool/releases/tag/V1.0).
 
 2.56 adds the **软件来源** / **GitHub source** entry next to the dashboard title. It opens the project's [GitHub repository](https://github.com/dkz9mfcfhn-oss/btc-scanning-tool) in the default browser.
 
@@ -77,7 +81,7 @@ Build on Windows (Go 1.24+):
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
 $env:CGO_ENABLED = "0"
-go build -trimpath -ldflags="-s -w -H windowsgui" -o MineWatch-Native.exe .
+go build -trimpath -ldflags="-s -w -H windowsgui" -o BTC-scanning-tool-V1.2.exe .
 ```
 
 Run `go test -race ./...` on a race-supported host. Cross-platform static check: `GOOS=windows GOARCH=amd64 go vet -unsafeptr=false ./...`. Native Win32 callback LPARAM conversions intentionally use unsafe pointers.
@@ -98,4 +102,4 @@ No physical miner or Windows runtime validation has been completed in this devel
 
 2.25: embedded native icon, close-to-tray, explicit tray exit and Explorer restart handling. History disk retention is three UTC calendar dates; memory remains 25 hours. A minute maintenance ticker cleans even while paused. No notification service is enabled.
 
-Run `swift tools/make_icon_options.swift /path/to/options --round2` on macOS to generate the icon candidates. Use `04-goldscope.ico` and the matching PNG as `assets/minewatch.ico` and `assets/minewatch.png`. Windows builds link `icon_windows_amd64.syso`. To rebuild it for V1.0, compile the helper with `go -C tools/windows_resources build -o /absolute/path/windows_resources .` and run `windows_resources -ico assets/minewatch.ico -name "BTC scanning tool" -version 1.0.0.0 -product-version V1.0 -o icon_windows_amd64.syso`. Verify the EXE with `python3 tools/verify_windows_icon.py BTC-scanning-tool-V1.0.exe assets/minewatch.ico "BTC scanning tool" 1.0.0.0 V1.0`.
+Run `swift tools/make_icon_options.swift /path/to/options --round2` on macOS to generate the icon candidates. Use `04-goldscope.ico` and the matching PNG as `assets/minewatch.ico` and `assets/minewatch.png`. Windows builds link `icon_windows_amd64.syso`. To rebuild it for V1.2, compile the helper with `go -C tools/windows_resources build -o /absolute/path/windows_resources .` and run `windows_resources -ico assets/minewatch.ico -name "BTC scanning tool" -version 1.2.0.0 -product-version V1.2 -o icon_windows_amd64.syso`. Verify the EXE with `python3 tools/verify_windows_icon.py BTC-scanning-tool-V1.2.exe assets/minewatch.ico "BTC scanning tool" 1.2.0.0 V1.2`.

@@ -7,6 +7,7 @@ import (
 	"minerwatch/internal/store"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func validMeasurement(v *float64) bool { return v != nil && *v >= 0 && !math.IsInf(*v, 0) }
@@ -86,6 +87,22 @@ type profitSamples struct {
 	PowerSeconds, MatchedSeconds         float64
 	ManualKWh                            float64
 	ManualDevices                        int
+	RejectCoveredWorkEH                  float64 `json:"rejectCoveredWorkEH,omitempty"`
+	RejectedWorkEH                       float64 `json:"rejectedWorkEH,omitempty"`
+}
+
+type earningsPeriod struct {
+	start, asOf time.Time
+	average     farmAverage
+	profit      profitSamples
+}
+
+func earningsPeriodStart(now time.Time) time.Time {
+	start, afterCutoff := dailyReportWindow(now)
+	if !afterCutoff {
+		start = start.Add(-farmAverageWindow)
+	}
+	return start
 }
 
 func (p *profitSamples) add(v profitSamples) {
@@ -96,12 +113,15 @@ func (p *profitSamples) add(v profitSamples) {
 	p.MatchedSeconds += v.MatchedSeconds
 	p.ManualKWh += v.ManualKWh
 	p.ManualDevices += v.ManualDevices
+	p.RejectCoveredWorkEH += v.RejectCoveredWorkEH
+	p.RejectedWorkEH += v.RejectedWorkEH
 }
 
 func sampleProfit(v store.HashrateAverage) profitSamples {
 	p := profitSamples{
 		EnergyKWh: v.EnergyKWh, MatchedKWh: v.MatchedKWh, MatchedWorkEH: v.MatchedWorkEH,
 		PowerSeconds: v.PowerCovered.Seconds(), MatchedSeconds: v.Matched.Seconds(), ManualKWh: v.ManualKWh,
+		RejectCoveredWorkEH: v.RejectCoveredWorkEH, RejectedWorkEH: v.RejectedWorkEH,
 	}
 	if v.ManualCovered > 0 {
 		p.ManualDevices = 1
@@ -110,34 +130,68 @@ func sampleProfit(v store.HashrateAverage) profitSamples {
 }
 
 type profitEstimate struct {
-	Gross, PoolFee, Electricity, Net *float64
-	PairedCoverage                   float64
-	Partial                          bool
+	Gross, PairedGross, PoolFee, Electricity, PairedElectricity, Net *float64
+	RejectPercent, RejectionLoss                                     *float64
+	PairedCoverage, RejectCoverage                                   float64
+	Partial                                                          bool
 }
 
-func estimateProfit(farm farmAverage, samples profitSamples, quote marketQuote, tariff *float64, poolFeePercent float64) profitEstimate {
+func estimateProfit(farm farmAverage, samples profitSamples, quote marketQuote, tariff *float64, poolFeePercent float64, window time.Duration) profitEstimate {
 	var p profitEstimate
 	pricePerEH := quote.CNYPerEH()
-	fee := poolFeePercent / 100
+	var payableRevenue float64
+	if samples.RejectCoveredWorkEH > 0 && samples.MatchedWorkEH > 0 {
+		p.RejectCoverage = min(1, samples.RejectCoveredWorkEH/samples.MatchedWorkEH)
+		p.RejectPercent = num(100 * samples.RejectedWorkEH / samples.RejectCoveredWorkEH)
+	}
 	if farm.Valid > 0 && pricePerEH > 0 {
 		p.Gross = num(farm.WorkEH * pricePerEH)
-		p.PoolFee = num(*p.Gross * fee)
+		if samples.MatchedSeconds > 0 {
+			p.PairedGross = num(samples.MatchedWorkEH * pricePerEH)
+			if p.RejectPercent != nil {
+				p.RejectionLoss = num(samples.RejectedWorkEH * pricePerEH)
+			}
+			payableRevenue = max(0, samples.MatchedWorkEH-samples.RejectedWorkEH) * pricePerEH
+			p.PoolFee = num(payableRevenue * (poolFeePercent / 100))
+		}
 	}
 	if tariff != nil && samples.PowerSeconds > 0 {
 		cost := samples.EnergyKWh * *tariff
 		if !math.IsInf(cost, 0) {
 			p.Electricity = &cost
+			if samples.MatchedSeconds > 0 {
+				p.PairedElectricity = num(samples.MatchedKWh * *tariff)
+			}
 		}
 	}
-	if farm.Devices > 0 {
-		p.PairedCoverage = min(1, samples.MatchedSeconds/(farmAverageWindow.Seconds()*float64(farm.Devices)))
+	if farm.Devices > 0 && window > 0 {
+		p.PairedCoverage = min(1, samples.MatchedSeconds/(window.Seconds()*float64(farm.Devices)))
 	}
-	if p.Gross != nil && p.Electricity != nil && samples.MatchedSeconds > 0 {
-		pairedGross := samples.MatchedWorkEH * pricePerEH
-		p.Net = num(pairedGross*(1-fee) - samples.MatchedKWh**tariff)
+	if p.PairedGross != nil && p.PairedElectricity != nil {
+		p.Net = num(payableRevenue - *p.PoolFee - *p.PairedElectricity)
 		p.Partial = samples.MatchedSeconds+0.001 < max(samples.PowerSeconds, farm.DeviceHours*3600)
 	}
 	return p
+}
+
+func (p profitEstimate) rejectRateText() string {
+	if p.RejectPercent == nil {
+		return "—"
+	}
+	return fmt.Sprintf("%.2f%%", *p.RejectPercent)
+}
+
+func (l uiLanguage) profitCardDetails(p profitEstimate, width int32) (fee, rejected string) {
+	fee = fmt.Sprintf(l.text("矿池费 %s"), money(p.PoolFee))
+	rejected = fmt.Sprintf(l.text("拒绝率 %s"), p.rejectRateText())
+	if p.RejectPercent != nil && p.RejectCoverage < 0.999999 {
+		rejected += l.text(" · 部分")
+	}
+	if width >= 216 {
+		fee += fmt.Sprintf(l.text(" · 电费 %s"), money(p.PairedElectricity))
+		rejected += fmt.Sprintf(l.text(" · 损失 %s"), money(p.RejectionLoss))
+	}
+	return fee, rejected
 }
 
 func money(v *float64) string {
@@ -154,17 +208,41 @@ func (p profitEstimate) netCaption() string {
 	return "预估净收益"
 }
 
-func profitReportText(farm farmAverage, samples profitSamples, quote marketQuote, tariff *float64, poolFeePercent float64) string {
-	return chinese.profitReportText(farm, samples, quote, tariff, poolFeePercent)
+func (l uiLanguage) profitCardCaption(width int32) string {
+	caption := l.text("累计配对净收益")
+	if width >= 245 {
+		caption += l.text(" · 08:00 起")
+	}
+	return caption
 }
 
-func (l uiLanguage) profitReportText(farm farmAverage, samples profitSamples, quote marketQuote, tariff *float64, poolFeePercent float64) string {
-	p := estimateProfit(farm, samples, quote, tariff, poolFeePercent)
+func (l uiLanguage) earningsPeriodDetails(period earningsPeriod, quote marketQuote, tariff *float64, poolFeePercent float64) string {
+	const dateTime = "01-02 15:04"
+	end := period.start.Add(farmAverageWindow)
+	header := fmt.Sprintf(l.text("本期收益明细\n周期：%s — %s（北京时间）\n统计截至：%s\n\n"), period.start.Format(dateTime), end.Format(dateTime), period.asOf.In(reportZone).Format(dateTime))
+	return header + l.profitReportText(period.average, period.profit, quote, tariff, poolFeePercent, period.asOf.Sub(period.start))
+}
+
+func (l uiLanguage) profitReportText(farm farmAverage, samples profitSamples, quote marketQuote, tariff *float64, poolFeePercent float64, window time.Duration) string {
+	p := estimateProfit(farm, samples, quote, tariff, poolFeePercent, window)
 	energy := "—"
 	if samples.PowerSeconds > 0 {
 		energy = fmt.Sprintf(l.text("%.2f 度"), samples.EnergyKWh)
 	}
-	text := fmt.Sprintf(l.text("预估毛收入：%s\n矿池手续费（%.4g%%）：%s\n已采样电量：%s\n电费：%s\n%s：%s\n算力与功率配对覆盖：%.1f%%"), money(p.Gross), poolFeePercent, money(p.PoolFee), energy, money(p.Electricity), l.text(p.netCaption()), money(p.Net), p.PairedCoverage*100)
+	text := fmt.Sprintf(l.text("%s：%s"), l.text(p.netCaption()), money(p.Net))
+	if p.PairedGross == nil {
+		text += "\n" + fmt.Sprintf(l.text("已采样预估毛收入：%s"), money(p.Gross))
+	} else {
+		text += "\n" + fmt.Sprintf(l.text("配对预估毛收入：%s"), money(p.PairedGross))
+	}
+	text += "\n" + fmt.Sprintf(l.text("拒绝率：%s · 收入扣减：%s"), p.rejectRateText(), money(p.RejectionLoss))
+	text += "\n" + fmt.Sprintf(l.text("配对矿池手续费（%.4g%%）：%s\n配对电费：%s\n已采样电量：%s\n算力与功率配对覆盖：%.1f%%"), poolFeePercent, money(p.PoolFee), money(p.PairedElectricity), energy, p.PairedCoverage*100)
+	if p.PairedElectricity == nil && p.Electricity != nil {
+		text += "\n" + fmt.Sprintf(l.text("已采样电费：%s"), money(p.Electricity))
+	}
+	if samples.MatchedWorkEH > 0 && p.RejectCoverage < 0.999999 {
+		text += "\n" + fmt.Sprintf(l.text("拒绝率覆盖：%.1f%%（仅对有数据的算力扣减）"), p.RejectCoverage*100)
+	}
 	if samples.ManualDevices > 0 {
 		text += fmt.Sprintf(l.text("\n其中手动功率估算：%d 台 · %.2f 度"), samples.ManualDevices, samples.ManualKWh)
 	}

@@ -428,9 +428,10 @@ func windowProc(h uintptr, m uint32, w, l uintptr) uintptr {
 		}
 		if call(user, "IsWindowVisible", desktop.h) != 0 && call(user, "IsIconic", desktop.h) == 0 {
 			refreshProgressIndicator()
-		}
-		if call(user, "IsWindowVisible", desktop.h) != 0 && call(user, "IsIconic", desktop.h) == 0 && time.Since(desktop.lastRefresh) > 4*time.Second {
-			refreshNative()
+			now := time.Now()
+			if now.Sub(desktop.lastRefresh) > 4*time.Second || !desktop.average24.earnings.start.Equal(earningsPeriodStart(now)) {
+				refreshNative()
+			}
 		}
 		return 0
 	case 0x111:

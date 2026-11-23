@@ -34,10 +34,10 @@ func (f farmAverage) coverage() float64 {
 }
 
 type rollingFarmAverage struct {
-	ips     []string
-	at      time.Time
-	average farmAverage
-	profit  profitSamples
+	ips      []string
+	at       time.Time
+	average  farmAverage
+	earnings earningsPeriod
 }
 
 // The dashboard refresh loop owns this cache, and paint only consumes its
@@ -54,15 +54,17 @@ func (c *rollingFarmAverage) refresh(now time.Time, devices []*Device, db *store
 		return
 	}
 	summary := farmAverage{}
-	var profit profitSamples
-	averages := db.RecentHashrateAverages(ips, now.Add(-farmAverageWindow), now)
+	earnings := earningsPeriod{start: earningsPeriodStart(now), asOf: now}
+	averages, period := db.RecentHashrateAndProfit(ips, now.Add(-farmAverageWindow), earnings.start, now)
 	for _, ip := range ips {
 		v := averages[ip]
 		summary.add(v.MeanTH, v.Covered.Hours())
-		profit.add(sampleProfit(v))
+		v = period[ip]
+		earnings.average.add(v.MeanTH, v.Covered.Hours())
+		earnings.profit.add(sampleProfit(v))
 	}
 	c.average = summary
-	c.profit = profit
+	c.earnings = earnings
 	c.ips = ips
 	c.at = now.Truncate(15 * time.Second)
 }
